@@ -1,0 +1,39 @@
+# ─── KLUCZE I HASŁA — NIGDY NA GITHUB ────────────────────────────────────────
+# Wyciek klucza API do publicznego repozytorium to najczęstszy i najdroższy
+# błąd początkującego. Boty skanują GitHub w czasie rzeczywistym i potrafią
+# wykorzystać znaleziony klucz w kilka minut.
+.env
+.env.local
+.env.local.txt
+.env.*.local
+.env.production
+
+# ─── TWOJE DANE OSOBOWE ──────────────────────────────────────────────────────
+# Katalog data/ zawiera profil zbudowany z Twojego CV: imię, nazwisko, adres
+# e-mail, telefon, historię zatrudnienia. To dane, które mają zostać
+# na Twoim komputerze i nigdzie indziej.
+data/*.json
+!data/.gitkeep
+
+# ─── PLIKI GENEROWANE ────────────────────────────────────────────────────────
+# node_modules odtwarza się poleceniem npm install w kilkanaście sekund.
+# Nie przenosi się poprawnie między komputerami, więc nie ma sensu go wysyłać.
+node_modules/
+.next/
+out/
+build/
+*.tsbuildinfo
+next-env.d.ts
+
+# ─── ŚMIECI SYSTEMOWE ────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+*.log
+npm-debug.log*
+
+# ─── ZESTAW TESTOWY CV ───────────────────────────────────────────────────────
+# Prawdziwe CV — własne i cudze — nie trafiają do repozytorium.
+# Sam plik przykładowy zostaje, żeby było wiadomo, jak zbudować własny zestaw.
+eval/cases/*
+!eval/cases/PRZYKLAD.json

@@ -1,0 +1,9 @@
+{
+  "_komentarz": "To jest przykład formatu. Usuń ten plik i wstaw własne przypadki: dla każdego CV para plików nazwa.pdf + nazwa.json.",
+  "firstName": "Magdalena",
+  "lastName": "Nikiel",
+  "email": "przyklad@example.com",
+  "experienceCount": 4,
+  "mustHaveSkills": ["Power BI", "SQL", "Excel"],
+  "mustNotContain": ["Iturri", "final", "v3"]
+}

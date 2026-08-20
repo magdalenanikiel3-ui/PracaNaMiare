@@ -1,0 +1,31 @@
+{
+  "manifest_version": 3,
+  "name": "Praca na miarę — zbieracz ofert",
+  "version": "0.5.0",
+  "description": "Wysyła ofertę, którą właśnie oglądasz, do Twojej lokalnej aplikacji Praca na miarę.",
+  "permissions": ["activeTab", "storage", "scripting"],
+  "host_permissions": [
+    "http://localhost:3000/*",
+    "https://*.pracuj.pl/*",
+    "https://*.olx.pl/*",
+    "https://*.linkedin.com/*",
+    "https://*.theprotocol.it/*",
+    "https://*.justjoin.it/*",
+    "https://*.nofluffjobs.com/*"
+  ],
+  "action": { "default_popup": "popup.html", "default_title": "Praca na miarę" },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*.pracuj.pl/*",
+        "https://*.olx.pl/*",
+        "https://*.linkedin.com/jobs/*",
+        "https://*.theprotocol.it/*",
+        "https://*.justjoin.it/*",
+        "https://*.nofluffjobs.com/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
