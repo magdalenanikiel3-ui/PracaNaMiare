@@ -33,6 +33,43 @@ od niego niezależny.
 
 ---
 
+## Ekrany
+
+Nawigacja po lewej stronie, każdy ekran osobno:
+
+| Ekran | Do czego |
+|---|---|
+| **Start** | wgranie CV |
+| **Mój profil** | przegląd i **poprawianie** wszystkiego, co odczytano z CV |
+| **Kierunki** | pod jakimi nazwami szukać |
+| **Preferencje** | miasto, tryb pracy, wynagrodzenie, wykluczenia |
+| **Obserwowane** | firmy, których zakładki Kariera są czytane |
+| **Oferty** | wyniki z uzasadnieniem i lukami |
+
+### Profil jest edytowalny — i to jest istotne
+
+Kliknięcie dowolnej wartości pozwala ją poprawić. Wpisana ręcznie dostaje poziom
+pewności **„potwierdzone”** — najwyższy z możliwych — i od tego momentu żadna
+kolejna analiza CV jej nie nadpisze.
+
+To dopełnienie zasady z założeń projektu: *AI nie zgaduje, tylko pyta*. Model
+oznacza, czego nie ustalił, a ekran profilu daje miejsce, żeby na te pytania
+odpowiedzieć. Bez tego oznaczanie niepewności było bezużyteczne — użytkownik
+widział „nie udało się ustalić” i nie mógł nic z tym zrobić.
+
+## Limity darmowego Gemini
+
+Jedno wyszukiwanie potrafi wysłać kilkanaście zapytań do modelu: analiza CV,
+kierunki, trzy partie oceny ofert, plus po jednym na każdy czytany serwis
+branżowy i każdą obserwowaną firmę. Darmowy tier ma limit na minutę.
+
+Dlatego każde wywołanie modelu jest **ponawiane z odczekiwaniem** (1s, 3s, 7s, 15s)
+przy przekroczeniu limitu i przy chwilowej niedostępności serwera. Ponawiane są
+wyłącznie błędy przejściowe — zły klucz nie, bo kolejna próba da to samo.
+
+Gdy mimo to się nie uda, interfejs pokazuje **prawdziwą przyczynę**, a nie ogólne
+„nie udało się połączyć”. Komunikat, z którym nie da się nic zrobić, jest bezużyteczny.
+
 ## Co się zmieniło względem v0.4 i dlaczego
 
 | Obszar | v0.4 | v0.5 | Powód |

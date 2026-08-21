@@ -1,4 +1,4 @@
-import { getAI, parseJson } from "./provider";
+import { getAI, parseJson, withRetry } from "./provider";
 import type { MasterProfile } from "../profile/schema";
 import { profileSignals } from "./expand-queries";
 
@@ -109,7 +109,7 @@ Typ firmy: ${prefs.companyTypes.join(", ")}
 Zaproponuj ${limit} firm działających w Polsce, których zakładkę "Kariera"
 warto pilnować przy tym profilu.`;
 
-  const raw = await getAI().generate(prompt, { system: SYSTEM, schema: SCHEMA, temperature: 0.6 });
+  const raw = await withRetry(() => getAI().generate(prompt, { system: SYSTEM, schema: SCHEMA, temperature: 0.6 }), "podpowiedzi firm");
   const out = parseJson<{ companies: Omit<SuggestedCompany, "careerUrl">[] }>(raw);
 
   const list = (out.companies ?? []).slice(0, limit);

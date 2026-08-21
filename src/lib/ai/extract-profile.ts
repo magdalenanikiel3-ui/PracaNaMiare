@@ -1,4 +1,4 @@
-import { getAI, parseJson } from "./provider";
+import { getAI, parseJson, withRetry } from "./provider";
 import { canonicalizeSkill, emptyProfile, type Confidence, type MasterProfile } from "../profile/schema";
 
 /**
@@ -65,7 +65,28 @@ ZASADY BEZWZGLĘDNE:
    człowiek — rozumiejąc układ, nie kolejność bajtów.
 
 7. NIE INTERPRETUJESZ nazwy pliku, bo jej nie dostajesz. Opierasz się wyłącznie
-   na treści dokumentu.`;
+   na treści dokumentu.
+
+8. JĘZYKI OBCE WYCIĄGASZ ZAWSZE, gdy tylko są w dokumencie. To pole bywa
+   pomijane, a jest jednym z najczęstszych wymagań w ogłoszeniach.
+   W polskich CV języki bywają zapisane na wiele sposobów:
+   - w osobnej sekcji "Języki", "Języki obce", "Languages",
+   - jako lista z poziomem: "angielski – B2", "niemiecki: średniozaawansowany",
+   - opisowo: "biegła znajomość angielskiego w mowie i piśmie",
+   - graficznie: kropkami, gwiazdkami lub paskiem postępu przy nazwie języka,
+   - flagami zamiast nazw,
+   - wewnątrz podsumowania zawodowego lub opisu stanowiska.
+   Poziom podajesz dokładnie tak, jak w dokumencie. Gdy jest tylko wykres
+   albo kropki, wpisujesz to, co widzisz, np. "4/5" lub "zaawansowany".
+   Gdy poziomu nie ma wcale — sam język, a poziom zostaw pusty.
+   JĘZYK OJCZYSTY też wypisujesz, jeśli jest wymieniony.
+
+9. CERTYFIKATY I UPRAWNIENIA wyciągasz tak samo skrupulatnie. W Polsce liczą
+   się szczególnie: prawo jazdy z kategorią, uprawnienia SEP, uprawnienia
+   budowlane, certyfikaty księgowe, ACCA, CIMA, PRINCE2, PMP, Scrum,
+   certyfikaty językowe, uprawnienia na wózki widłowe, książeczka sanepidu.
+   Znajdują się czasem poza sekcją "Certyfikaty" — także w opisie
+   doświadczenia albo w dodatkowych informacjach.`;
 
 const SCHEMA = {
   type: "object",
@@ -180,16 +201,22 @@ tak, jak występują w dokumencie.
 
 --- TEKST POMOCNICZY ---
 ${input.plainText.slice(0, 24000)}
---- KONIEC ---`;
+--- KONIEC ---
 
-  const raw = await getAI().generate(prompt, {
+Zanim odpowiesz, sprawdź jeszcze raz, czy nie pominąłeś:
+  - języków obcych wraz z poziomem,
+  - certyfikatów, uprawnień i prawa jazdy,
+  - umiejętności wymienionych wewnątrz opisu obowiązków, a nie tylko na liście.
+Te trzy rzeczy są najczęściej pomijane, a decydują o dopasowaniu do ofert.`;
+
+  const raw = await withRetry(() => getAI().generate(prompt, {
     system: SYSTEM,
     schema: SCHEMA,
     temperature: 0.1,
     // Model dostaje ORYGINALNY plik — dzięki temu widzi układ stron, kolumny
     // i tabele. To jest właśnie różnica między "odczytaniem PDF" a "zrozumieniem CV".
     files: [{ mimeType: input.mimeType, data: input.bytes }],
-  });
+  }), "analiza CV");
 
   return assemble(parseJson<Record<string, unknown>>(raw), input.plainText);
 }
@@ -313,12 +340,34 @@ function assemble(r: Record<string, unknown>, source: string): MasterProfile {
     to: mk(`edu.${i}.to`, e.to),
   }));
 
-  p.languages = ((r.languages ?? []) as Array<Record<string, unknown>>).map((l, i) => ({
-    id: `lang.${i}`,
-    name: String(l.name ?? ""),
-    level: l.level ? String(l.level) : null,
-    confidence: quoteVerified(l.quote as string, source) ? ("high" as const) : ("medium" as const),
-  })).filter((l) => l.name);
+  const seenLang = new Set<string>();
+  p.languages = ((r.languages ?? []) as Array<Record<string, unknown>>)
+    .map((l, i) => ({
+      id: `lang.${i}`,
+      name: String(l.name ?? "").trim(),
+      level: l.level ? String(l.level).trim() : null,
+      confidence: quoteVerified(l.quote as string, source) ? ("high" as const) : ("medium" as const),
+    }))
+    .filter((l) => {
+      const k = fold(l.name);
+      if (!l.name || seenLang.has(k)) return false;
+      seenLang.add(k);
+      return true;
+    });
+
+  // Jezyk wymieniony w sekcji umiejetnosci, a pominiety w sekcji jezykow —
+  // czesty przypadek w CV, gdzie angielski stoi obok Excela na jednej liscie.
+  for (const sk of p.skills.filter((x) => x.category === "language")) {
+    if (!seenLang.has(fold(sk.name))) {
+      seenLang.add(fold(sk.name));
+      p.languages.push({
+        id: `lang.s${p.languages.length}`,
+        name: sk.name,
+        level: null,
+        confidence: "low" as const,
+      });
+    }
+  }
 
   p.certificates = ((r.certificates ?? []) as Array<Record<string, unknown>>).map((c, i) => ({
     id: `cert.${i}`,
@@ -335,6 +384,7 @@ function assemble(r: Record<string, unknown>, source: string): MasterProfile {
     fieldId: String(q.field ?? ""), question: String(q.question ?? ""), why: String(q.why ?? ""),
   })).filter((q) => q.question);
 
+  p.openQuestions = [];
   const weak: Array<[string, string]> = [];
   const check = (f: { id: string; value: string | null; confidence: Confidence }, label: string) => {
     if (f.confidence === "missing" || f.confidence === "low") weak.push([f.id, label]);
@@ -344,7 +394,18 @@ function assemble(r: Record<string, unknown>, source: string): MasterProfile {
   check(p.person.email, "adres e-mail");
   check(p.headline, "obecne stanowisko lub specjalizacja");
 
+  // Jezyk bez poziomu jest w ogloszeniach bezuzyteczny — "angielski" nie mowi,
+  // czy kandydat spelnia wymog "angielski B2". Lepiej dopytac.
+  for (const l of p.languages.filter((x) => !x.level)) {
+    p.openQuestions.push({
+      fieldId: l.id,
+      question: `Na jakim poziomie znasz język ${l.name.toLowerCase()}?`,
+      why: "W CV nie było poziomu, a większość ogłoszeń podaje konkretny wymóg, np. B2.",
+    });
+  }
+
   p.openQuestions = [
+    ...p.openQuestions,
     ...asks,
     ...weak.map(([fieldId, label]) => ({
       fieldId,

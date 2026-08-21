@@ -204,6 +204,98 @@ class OllamaProvider implements AIProvider {
   usage() { return { ...this.stats }; }
 }
 
+
+
+/**
+ * ROZKLADANIE ZAPYTAN W CZASIE
+ *
+ * Darmowy tier Gemini pozwala na 10 zapytan na minute. Jedno pelne
+ * wyszukiwanie w tej aplikacji potrafi wyslac wiecej — i wtedy czesc
+ * odbija sie od limitu, mimo ze klucz jest calkiem sprawny.
+ *
+ * Ponawianie z odczekiwaniem (withRetry) ratuje sytuacje, ale dziala
+ * PO fakcie: najpierw dostajemy blad, potem czekamy. Taniej jest w ogole
+ * nie przekraczac limitu — dlatego zapytania sa rozkladane w czasie.
+ *
+ * Przy platnym rozliczeniu limity sa duzo wyzsze; wystarczy podniesc
+ * AI_MAX_RPM w pliku .env.local i kolejka praktycznie znika.
+ */
+class RateLimiter {
+  private last = 0;
+  private queue: Promise<void> = Promise.resolve();
+
+  constructor(private rpm: number) {}
+
+  /** Ustawia sie w kolejce i czeka na swoja kolej. */
+  async acquire(): Promise<void> {
+    const minGap = 60_000 / Math.max(1, this.rpm);
+    const mine = this.queue.then(async () => {
+      const wait = Math.max(0, this.last + minGap - Date.now());
+      if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+      this.last = Date.now();
+    });
+    this.queue = mine.catch(() => {});
+    return mine;
+  }
+}
+
+const limiter = new RateLimiter(Number(process.env.AI_MAX_RPM ?? 10));
+
+/** Ile zapytan na minute wolno wyslac — do pokazania w interfejsie. */
+export function maxRequestsPerMinute(): number {
+  return Number(process.env.AI_MAX_RPM ?? 10);
+}
+
+/**
+ * PONAWIANIE Z ODCZEKIWANIEM
+ *
+ * DLACZEGO TO JEST KONIECZNE, A NIE "MILE WIDZIANE":
+ *
+ * Darmowy tier Gemini ma limit zapytan na minute. Pojedyncze wyszukiwanie
+ * w tej aplikacji potrafi wyslac kilkanascie zapytan pod rzad:
+ *   1 analiza CV + 1 kierunki + 3 partie oceny ofert
+ *   + po jednym na kazdy czytany serwis branzowy i kazda obserwowana firme.
+ *
+ * Bez ponawiania czesc z nich odbija sie od limitu i uzytkownik widzi
+ * "nie udalo sie polaczyc z modelem AI" — mimo ze klucz i polaczenie
+ * sa calkiem sprawne. Wystarczy odczekac sekunde i sprobowac ponownie.
+ *
+ * Ponawiamy WYLACZNIE bledy przejsciowe: limit zapytan i chwilowa
+ * niedostepnosc serwera. Bledny klucz czy odrzucenie tresci ponawiane
+ * nie sa, bo kolejna proba da dokladnie ten sam wynik.
+ */
+type RetryClass = "rate" | "server" | "fatal";
+
+function classifyError(msg: string): RetryClass {
+  if (/429|RESOURCE_EXHAUSTED|rate.?limit|quota/i.test(msg)) return "rate";
+  if (/50[0234]|UNAVAILABLE|overloaded|deadline|ETIMEDOUT|ECONNRESET|fetch failed/i.test(msg)) return "server";
+  return "fatal";
+}
+
+export async function withRetry<T>(fn: () => Promise<T>, label = "AI"): Promise<T> {
+  const delays = [1200, 3000, 7000, 15000];
+  let last: Error | null = null;
+
+  for (let attempt = 0; attempt <= delays.length; attempt++) {
+    try {
+      await limiter.acquire();
+      return await fn();
+    } catch (e) {
+      last = e as Error;
+      const kind = classifyError(last.message ?? "");
+      if (kind === "fatal" || attempt === delays.length) throw last;
+
+      const wait = delays[attempt];
+      console.warn(
+        `[${label}] ${kind === "rate" ? "przekroczony limit zapytan" : "serwer chwilowo niedostepny"}` +
+        ` — czekam ${wait / 1000}s i ponawiam (proba ${attempt + 2}/${delays.length + 1})`
+      );
+      await new Promise((r) => setTimeout(r, wait));
+    }
+  }
+  throw last ?? new Error("Nieznany blad AI");
+}
+
 let cached: AIProvider | null = null;
 
 export function getAI(): AIProvider {
@@ -232,7 +324,9 @@ function friendlyGeminiError(msg: string, model: string): string {
   if (/API key not valid|API_KEY_INVALID/i.test(msg))
     return "Klucz GEMINI_API_KEY jest nieprawidłowy. Wygeneruj nowy na https://aistudio.google.com/apikey i wklej do .env.local";
   if (/quota|RESOURCE_EXHAUSTED|429/i.test(msg))
-    return "Wyczerpał się darmowy limit zapytań do Gemini. Odczekaj kilka minut albo ustaw inny model w GEMINI_MODEL.";
+    return "Przekroczony limit zapytań do Gemini — nawet po kilku ponowieniach. " +
+           "Darmowy tier pozwala na ograniczoną liczbę zapytań na minutę. " +
+           "Odczekaj 1–2 minuty i spróbuj ponownie, albo zmniejsz liczbę ocenianych ofert.";
   if (/404|not found|no longer available/i.test(msg))
     return `Model "${model}" jest niedostępny. Wpisz aktualną nazwę do GEMINI_MODEL w .env.local — listę znajdziesz na https://ai.google.dev/gemini-api/docs/models`;
   if (/SAFETY|blocked/i.test(msg))

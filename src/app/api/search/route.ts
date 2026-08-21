@@ -37,9 +37,11 @@ export async function POST(req: Request) {
   }
 
   const store = await readJson<{ directions: Direction[] }>("directions.json", { directions: [] });
-  let directions = store.directions.filter((d) => d.accepted !== false);
+  let directions = store.directions.filter((d) => d.accepted);
   if (directions.length === 0) {
-    return NextResponse.json({ error: "Najpierw wybierz przynajmniej jeden kierunek zawodowy." }, { status: 400 });
+    return NextResponse.json({
+      error: "Nie zaznaczono żadnego kierunku. Wejdź w „Kierunki” i zaznacz przynajmniej jeden.",
+    }, { status: 400 });
   }
 
   // Aktywacja serwisów branżowych na podstawie rodzin zawodowych z wybranych
@@ -95,9 +97,20 @@ export async function POST(req: Request) {
   const { passed, rejected } = prefilter(profile, allOffers);
 
   // ── RERANKING AI (płatny, tylko czubek listy) ─────────────────────────────
+  // Ile ofert trafia do oceny AI.
+  //
+  // Kazde 8 ofert = jedno zapytanie do modelu. Przy darmowym limicie
+  // 10 zapytan na minute domyslne 12 ofert (2 zapytania) zostawia zapas
+  // na analize CV, kierunki i czytanie stron firm.
+  // Przy platnym rozliczeniu smialo podnies RERANK_MAX_OFFERS do 24 lub wiecej.
+  const topN = Math.max(4, Math.min(48, Number(process.env.RERANK_MAX_OFFERS ?? 12)));
+
   let ranked: Ranked[] = [];
+  let aiError: string | null = null;
   if (!body.skipRerank && passed.length > 0) {
-    ranked = await rerank(profile, passed, 24);
+    const r = await rerank(profile, passed, topN);
+    ranked = r.ranked;
+    aiError = r.error;
   }
 
   const rankMap = new Map(ranked.map((r) => [r.offerId, r]));
@@ -118,6 +131,8 @@ export async function POST(req: Request) {
 
   const payload = {
     results,
+    /** Prawdziwa przyczyna, gdy ocena AI się nie powiodła — pokazywana w interfejsie. */
+    aiError,
     /** Oferty, na które użytkownik sam by nie trafił — nazwa nie pasuje, treść tak. */
     hidden: results
       .filter((r) => r.mismatch.flagged)
@@ -138,6 +153,7 @@ export async function POST(req: Request) {
       rejected: rejected.length,
       reranked: ranked.length,
       queries: q1.length,
+      topN,
       queriesByTitle: qTitles.length,
       queriesBySkill: qSkills.length,
       hiddenFound: passed.filter((x) => x.mismatch.flagged).length,

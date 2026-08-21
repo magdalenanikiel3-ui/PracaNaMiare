@@ -1,4 +1,4 @@
-import { getAI, parseJson } from "../ai/provider";
+import { getAI, parseJson, withRetry } from "../ai/provider";
 import { extractSkills, parseRemote, parseSalary, type Offer } from "./types";
 
 /**
@@ -143,10 +143,10 @@ export async function readJobsPage(
 
     const looksLikeJobsPage = JOBS_HINTS.test(text);
 
-    const raw = await getAI().generate(
+    const raw = await withRetry(() => getAI().generate(
       `Adres strony: ${pageUrl}\n\nTreść strony:\n\n${text.slice(0, 30000)}`,
       { system: SYSTEM, schema: SCHEMA, temperature: 0.1 }
-    );
+    ), "czytanie strony");
     const parsed = parseJson<{ offers: Array<Record<string, string>> }>(raw);
 
     const base = new URL(pageUrl);

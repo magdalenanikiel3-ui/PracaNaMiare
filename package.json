@@ -11,7 +11,10 @@
     "eval": "tsx eval/run.ts",
     "test:mismatch": "tsx eval/test-mismatch.ts",
     "diagnoza": "tsx scripts/diagnoza.ts",
-    "firmy": "tsx scripts/firmy.ts"
+    "firmy": "tsx scripts/firmy.ts",
+    "test:edycja": "tsx eval/test-edycja.ts",
+    "test": "tsx eval/test-mismatch.ts && tsx eval/test-edycja.ts && tsx eval/test-kierunki.ts",
+    "test:kierunki": "tsx eval/test-kierunki.ts"
   },
   "dependencies": {
     "@google/generative-ai": "0.24.1",

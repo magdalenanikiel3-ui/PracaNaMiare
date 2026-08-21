@@ -1,4 +1,4 @@
-import { getAI, parseJson } from "../ai/provider";
+import { getAI, parseJson, withRetry } from "../ai/provider";
 import type { MasterProfile } from "../profile/schema";
 import type { Prefiltered } from "./prefilter";
 
@@ -117,17 +117,31 @@ const SCHEMA = {
 /** Ile ofert wysyłamy do modelu w jednym zapytaniu. Kompromis: koszt vs jakość uwagi modelu. */
 const BATCH = 8;
 
+export type RerankResult = {
+  ranked: Ranked[];
+  /**
+   * Prawdziwa przyczyna niepowodzenia, jesli ocena AI sie nie udala.
+   *
+   * Wczesniej blad byl tylko logowany na serwerze, a uzytkownik widzial
+   * ogolne "nie udalo sie polaczyc z modelem AI" i nie mial jak zgadnac,
+   * czy chodzi o zly klucz, limit zapytan, czy brak internetu.
+   * Komunikat, z ktorym nie da sie nic zrobic, jest bezuzyteczny.
+   */
+  error: string | null;
+};
+
 export async function rerank(
   profile: MasterProfile,
   items: Prefiltered[],
   topN = 24
-): Promise<Ranked[]> {
+): Promise<RerankResult> {
   const shortlist = items.slice(0, topN);
-  if (shortlist.length === 0) return [];
+  if (shortlist.length === 0) return { ranked: [], error: null };
 
   const profileBlock = renderProfile(profile);
   const validIds = collectIds(profile);
   const out: Ranked[] = [];
+  let firstError: string | null = null;
 
   for (let i = 0; i < shortlist.length; i += BATCH) {
     const batch = shortlist.slice(i, i + BATCH);
@@ -147,7 +161,10 @@ ${offersBlock}
 Oceń każdą ofertę osobno. Zwróć dokładnie ${batch.length} wyników, po jednym na ofertę.`;
 
     try {
-      const raw = await getAI().generate(prompt, { system: SYSTEM, schema: SCHEMA, temperature: 0.3 });
+      const raw = await withRetry(
+        () => getAI().generate(prompt, { system: SYSTEM, schema: SCHEMA, temperature: 0.3 }),
+        "ocena ofert"
+      );
       const parsed = parseJson<{ results: Ranked[] }>(raw);
 
       for (const r of parsed.results ?? []) {
@@ -166,21 +183,27 @@ Oceń każdą ofertę osobno. Zwróć dokładnie ${batch.length} wyników, po je
         });
       }
     } catch (e) {
-      console.warn("[rerank] partia nieudana:", (e as Error).message);
+      const msg = (e as Error).message;
+      if (!firstError) firstError = msg;
+      console.warn("[rerank] partia nieudana:", msg);
       // Awaria modelu nie może wyzerować wyników — zostaje ocena z prefiltru.
       for (const x of batch) {
         out.push({
           offerId: x.offer.id,
           band: x.rough >= 70 ? "strong" : x.rough >= 45 ? "good" : "stretch",
-          verdict: "Ocena wstępna — nie udało się połączyć z modelem AI.",
+          verdict: "Ocena wstępna, bez udziału AI — oparta wyłącznie na pokryciu umiejętności.",
           strengths: x.matched.slice(0, 4).map((s) => ({ text: `Masz doświadczenie z: ${s}`, profileRefs: [] })),
           gaps: x.missing.slice(0, 4).map((s) => ({ text: `Wymagane: ${s}`, blocking: true })),
           flags: [],
         });
       }
     }
+
+    // Odstep miedzy partiami — darmowy tier ma limit zapytan na minute,
+    // a bez przerwy kolejne partie odbijaja sie od niego jedna po drugiej.
+    if (i + BATCH < shortlist.length) await new Promise((r) => setTimeout(r, 1500));
   }
-  return out;
+  return { ranked: out, error: firstError };
 }
 
 function renderProfile(p: MasterProfile): string {

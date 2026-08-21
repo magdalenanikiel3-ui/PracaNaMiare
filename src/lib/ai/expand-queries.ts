@@ -1,4 +1,4 @@
-import { getAI, parseJson } from "./provider";
+import { getAI, parseJson, withRetry } from "./provider";
 import type { MasterProfile } from "../profile/schema";
 import { familiesForSkills, lookupTitle, translateTitle, FAMILY_LABELS, type Family } from "../taxonomy/pl-titles";
 import type { Offer } from "../sources/types";
@@ -48,7 +48,18 @@ export type Direction = {
   stretch: "core" | "adjacent" | "pivot";
   /** Wyliczana przez nas, nie deklarowana przez model. */
   score: number;
-  accepted?: boolean;
+  /**
+   * Czy szukać pod tą nazwą. ZAWSZE ustawione — nigdy undefined.
+   *
+   * Wcześniej pole było trójstanowe (true / false / nieustawione), a system
+   * traktował "nieustawione" jak "szukaj". Efekt był mylący: klikniecie
+   * "Szukaj" nie zmieniało niczego widocznego, bo wszystko i tak juz bylo
+   * wyszukiwane, a "Pomiń" wygladalo jak jedyny przycisk, ktory cokolwiek robi.
+   *
+   * Teraz jest to zwykły przełącznik: zaznaczone znaczy szukam, odznaczone
+   * znaczy pomijam. Bez trzeciego stanu, ktorego nie da sie zobaczyc.
+   */
+  accepted: boolean;
 };
 
 /** Deterministyczne wyciągnięcie sygnałów z profilu — bez udziału modelu. */
@@ -95,6 +106,7 @@ function fromTaxonomy(p: MasterProfile): Direction[] {
     basedOn: p.skills.filter((s) => t.signals.some((x) => s.canonical.includes(x.replace(/\s/g, "")))).map((s) => s.id),
     stretch: sig.titles.some((x) => x.toLowerCase().includes(t.pl.toLowerCase().split(" ")[0])) ? "core" as const : "adjacent" as const,
     score: 0,
+    accepted: true,
   }));
 }
 
@@ -171,7 +183,7 @@ ${Object.entries(FAMILY_LABELS).map(([k, v]) => `${k} = ${v}`).join("\n")}
 
 Zaproponuj 8–14 stanowisk: kilka core, kilka adjacent, 2–3 pivot.`;
 
-  const raw = await getAI().generate(prompt, { system: AI_SYSTEM, schema: AI_SCHEMA, temperature: 0.7 });
+  const raw = await withRetry(() => getAI().generate(prompt, { system: AI_SYSTEM, schema: AI_SCHEMA, temperature: 0.7 }), "kierunki zawodowe");
   const out = parseJson<{ directions: Array<Omit<Direction, "id" | "familyLabel" | "origin" | "score">> }>(raw);
 
   // Zbiór istniejących identyfikatorów — do odsiania zmyślonych odwołań.
@@ -192,6 +204,7 @@ Zaproponuj 8–14 stanowisk: kilka core, kilka adjacent, 2–3 pivot.`;
       // Kontrola antyhalucynacyjna: zostawiamy tylko odwołania, które naprawdę istnieją.
       basedOn: (d.basedOn ?? []).filter((x) => validIds.has(x)),
       score: 0,
+      accepted: true,
     }))
     // Propozycja bez ANI JEDNEGO prawdziwego oparcia w profilu jest odrzucana.
     .filter((d) => d.basedOn.length > 0);
@@ -245,6 +258,7 @@ export function fromMarket(p: MasterProfile, offers: Offer[], minOverlap = 0.34)
         basedOn: p.skills.filter((s) => (b.sample.skills ?? []).some((x) => s.canonical === x.toLowerCase().replace(/[^a-z0-9+#.]/g, ""))).map((s) => s.id),
         stretch: "core" as const,
         score: 0,
+        accepted: true,
       };
     });
 }
@@ -276,7 +290,21 @@ export function mergeDirections(groups: Direction[][]): Direction[] {
     d.score = Math.min(100, originScore + evidenceScore + stretchScore);
   }
 
-  return [...byId.values()].sort((a, b) => b.score - a.score);
+  const merged = [...byId.values()].sort((a, b) => b.score - a.score);
+
+  // DOMYSLNY WYBOR — zaznaczamy to, co blisko doswiadczenia, i najlepsze
+  // z reszty. "Ambitne" zostawiamy odznaczone: kandydat ma je zobaczyc,
+  // ale nie chcemy zasypywac wynikow ofertami, do ktorych jeszcze nie pasuje.
+  //
+  // Ograniczamy tez liczbe zaznaczonych, bo kazda nazwa to osobne zapytanie
+  // do kazdego portalu — dwadziescia zaznaczonych nazw to setki zapytan.
+  let picked = 0;
+  for (const d of merged) {
+    const worth = d.stretch !== "pivot" && picked < 7;
+    d.accepted = worth;
+    if (worth) picked++;
+  }
+  return merged;
 }
 
 /** Pierwszy przebieg: taksonomia + AI. Odkrywanie zwrotne dochodzi po pierwszym wyszukaniu. */
@@ -355,7 +383,7 @@ export function buildSkillQueries(p: MasterProfile, max = 4): string[] {
  */
 export function buildQueries(dirs: Direction[], market: "pl" | "international" | "all"): string[] {
   const out = new Set<string>();
-  for (const d of dirs.filter((x) => x.accepted !== false)) {
+  for (const d of dirs.filter((x) => x.accepted)) {
     if (market !== "international") out.add(d.pl);
     if (market !== "pl") for (const v of d.variants) out.add(v);
     if (market === "pl" && out.size === 0) for (const v of d.variants) out.add(v);
